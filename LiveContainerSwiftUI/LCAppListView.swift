@@ -9,6 +9,11 @@ import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
+enum AppListLayout: String, CaseIterable {
+    case list
+    case grid
+}
+
 class SearchContext: ObservableObject {
     @Published var query: String = ""
     @Published var debouncedQuery: String = ""
@@ -80,9 +85,11 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
     
     @EnvironmentObject private var sharedModel : SharedModel
     @EnvironmentObject private var sharedAppSortManager : LCAppSortManager
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     
     @AppStorage("LCMultitaskMode", store: LCUtils.appGroupUserDefault) var multitaskMode: MultitaskMode = .virtualWindow
     @AppStorage("LCLaunchInMultitaskMode") var launchInMultitaskMode = false
+    @AppStorage("LCAppListLayout") private var layout: AppListLayout = .list
     
     @State private var isViewAppeared = false
     
@@ -125,6 +132,34 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
         _tweakFolderNames = tweakFolderNames
     }
     
+    private var gridColumns: [GridItem] {
+        let minWidth: CGFloat = horizontalSizeClass == .compact ? 92 : 120
+        return [GridItem(.adaptive(minimum: minWidth), spacing: 12)]
+    }
+    
+    private var hiddenAppsUnlockGridCard: some View {
+        Button {
+            Task { await authenticateUser() }
+        } label: {
+            VStack(spacing: 8) {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(.white)
+                    .frame(width: 28, height: 28)
+                    .background(Circle().fill(Color("BadgeColor")))
+                Text("lc.appList.unlockHiddenApps".loc)
+                    .font(.system(size: 12, weight: .semibold))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity)
+            }
+            .frame(maxWidth: .infinity, minHeight: 86)
+            .padding()
+            .background(RoundedRectangle(cornerRadius: 22).fill(Color.gray.opacity(0.1)))
+        }
+        .buttonStyle(.plain)
+    }
+    
     var body: some View {
         NavigationView {
             ScrollView {
@@ -136,29 +171,54 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                 })
                 .hidden()
                 
-                LazyVStack {
-                    ForEach(filteredApps, id: \.self) { app in
-                        LCAppBanner(appModel: app, delegate: self, appDataFolders: $appDataFolderNames, tweakFolders: $tweakFolderNames)
+                Group {
+                    if layout == .grid {
+                        LazyVGrid(columns: gridColumns, spacing: 16) {
+                            ForEach(filteredApps, id: \.self) { app in
+                                LCAppBanner(appModel: app, delegate: self, appDataFolders: $appDataFolderNames, tweakFolders: $tweakFolderNames, style: .grid)
+                            }
+                            .transition(.scale)
+                        }
+                        .padding(.horizontal)
+                        .padding(.top)
+                    } else {
+                        LazyVStack {
+                            ForEach(filteredApps, id: \.self) { app in
+                                LCAppBanner(appModel: app, delegate: self, appDataFolders: $appDataFolderNames, tweakFolders: $tweakFolderNames)
+                            }
+                            .transition(.scale)
+                        }
+                        .padding()
                     }
-                    .transition(.scale)
                 }
-                .padding()
                 .animation(searchContext.isTyping ? nil : .easeInOut, value: filteredApps)
 
                 VStack {
                     if LCUtils.appGroupUserDefault.bool(forKey: "LCStrictHiding") {
                         if sharedModel.isHiddenAppUnlocked {
-                            LazyVStack {
+                            VStack(alignment: .leading, spacing: 12) {
                                 HStack {
                                     Text("lc.appList.hiddenApps".loc)
                                         .font(.system(.title2).bold())
                                     Spacer()
                                 }
                                 
-                                ForEach(filteredHiddenApps, id: \.self) { app in
-                                    LCAppBanner(appModel: app, delegate: self, appDataFolders: $appDataFolderNames, tweakFolders: $tweakFolderNames)
+                                if layout == .grid {
+                                    LazyVGrid(columns: gridColumns, spacing: 16) {
+                                        ForEach(filteredHiddenApps, id: \.self) { app in
+                                            LCAppBanner(appModel: app, delegate: self, appDataFolders: $appDataFolderNames, tweakFolders: $tweakFolderNames, style: .grid)
+                                        }
+                                        .transition(.scale)
+                                    }
+                                    .padding(.top, 4)
+                                } else {
+                                    LazyVStack {
+                                        ForEach(filteredHiddenApps, id: \.self) { app in
+                                            LCAppBanner(appModel: app, delegate: self, appDataFolders: $appDataFolderNames, tweakFolders: $tweakFolderNames)
+                                        }
+                                        .transition(.scale)
+                                    }
                                 }
-                                .transition(.scale)
                                 
                             }
                             .padding()
@@ -171,22 +231,49 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                             }
                         }
                     } else if sharedModel.hiddenApps.count > 0 {
-                        LazyVStack {
+                        VStack(alignment: .leading, spacing: 12) {
                             HStack {
                                 Text("lc.appList.hiddenApps".loc)
                                     .font(.system(.title2).bold())
                                 Spacer()
-                            }
-                            ForEach(filteredHiddenApps, id: \.self) { app in
-                                if sharedModel.isHiddenAppUnlocked {
-                                    LCAppBanner(appModel: app, delegate: self, appDataFolders: $appDataFolderNames, tweakFolders: $tweakFolderNames)
-                                } else {
-                                    LCAppSkeletonBanner()
+                                if !sharedModel.isHiddenAppUnlocked {
+                                    Button {
+                                        Task { await authenticateUser() }
+                                    } label: {
+                                        Label("lc.appList.unlockHiddenApps".loc, systemImage: "lock.fill")
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
                                 }
                             }
-                            .animation(.easeInOut, value: sharedModel.isHiddenAppUnlocked)
-                            .onTapGesture {
-                                Task { await authenticateUser() }
+                            if layout == .grid {
+                                LazyVGrid(columns: gridColumns, spacing: 16) {
+                                    if !sharedModel.isHiddenAppUnlocked {
+                                        hiddenAppsUnlockGridCard
+                                    }
+                                    ForEach(filteredHiddenApps, id: \.self) { app in
+                                        if sharedModel.isHiddenAppUnlocked {
+                                            LCAppBanner(appModel: app, delegate: self, appDataFolders: $appDataFolderNames, tweakFolders: $tweakFolderNames, style: .grid)
+                                        } else {
+                                            LCAppSkeletonBanner(style: .grid)
+                                        }
+                                    }
+                                }
+                                .animation(.easeInOut, value: sharedModel.isHiddenAppUnlocked)
+                            } else {
+                                LazyVStack {
+                                    ForEach(filteredHiddenApps, id: \.self) { app in
+                                        if sharedModel.isHiddenAppUnlocked {
+                                            LCAppBanner(appModel: app, delegate: self, appDataFolders: $appDataFolderNames, tweakFolders: $tweakFolderNames)
+                                        } else {
+                                            LCAppSkeletonBanner()
+                                        }
+                                    }
+                                    .animation(.easeInOut, value: sharedModel.isHiddenAppUnlocked)
+                                    .onTapGesture {
+                                        Task { await authenticateUser() }
+                                    }
+                                }
                             }
                         }
                         .padding()
@@ -293,6 +380,14 @@ struct LCAppListView : View, LCAppBannerDelegate, LCAppModelDelegate {
                                 Label("lc.appList.sort.customManage".loc, systemImage: "slider.horizontal.3")
                             }
                         }
+                        Divider()
+                        Picker("Layout", selection: $layout) {
+                            Label("List", systemImage: "list.bullet")
+                                .tag(AppListLayout.list)
+                            Label("Grid", systemImage: "square.grid.2x2")
+                                .tag(AppListLayout.grid)
+                        }
+                        .pickerStyle(.inline)
                     } label: {
                         Label("lc.appList.sort".loc, systemImage: "line.3.horizontal.decrease.circle")
                     }

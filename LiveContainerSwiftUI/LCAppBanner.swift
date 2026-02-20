@@ -17,9 +17,15 @@ protocol LCAppBannerDelegate {
     func promptForGeneratedIconStyle() async -> GeneratedIconStyle?
 }
 
+enum LCAppBannerStyle {
+    case list
+    case grid
+}
+
 struct LCAppBanner : View {
     @State var appInfo: LCAppInfo
     var delegate: LCAppBannerDelegate
+    var style: LCAppBannerStyle = .list
     
     @ObservedObject var model : LCAppModel
     
@@ -44,11 +50,12 @@ struct LCAppBanner : View {
     @Environment(\.colorScheme) var colorScheme
     @EnvironmentObject private var sharedModel : SharedModel
     
-    init(appModel: LCAppModel, delegate: LCAppBannerDelegate, appDataFolders: Binding<[String]>, tweakFolders: Binding<[String]>) {
+    init(appModel: LCAppModel, delegate: LCAppBannerDelegate, appDataFolders: Binding<[String]>, tweakFolders: Binding<[String]>, style: LCAppBannerStyle = .list) {
         _appInfo = State(initialValue: appModel.appInfo)
         _appDataFolders = appDataFolders
         _tweakFolders = tweakFolders
         self.delegate = delegate
+        self.style = style
         
         _model = ObservedObject(wrappedValue: appModel)
         _mainColor = State(initialValue: Color.clear)
@@ -58,134 +65,205 @@ struct LCAppBanner : View {
     }
     @State private var mainHueColor: CGFloat? = nil
     
-    var body: some View {
-
+    @ViewBuilder
+    private var content: some View {
+        if style == .list {
+            listBody
+        } else {
+            gridBody
+        }
+    }
+    
+    private var listBody: some View {
         HStack {
             HStack {
-                Image(uiImage: icon)
-                    .resizable().resizable().frame(width: 60, height: 60)
-                    .clipShape(RoundedRectangle(cornerSize: CGSize(width:16, height: 16)))
-
-                VStack (alignment: .leading, content: {
-                    let color = (dynamicColors ? mainColor : Color("FontColor"))
-                    // note: keep this so the color updates when toggling dark mode
-                    let textColor = colorScheme == .dark ? color.readableTextColor() : color.readableTextColor()
-                    HStack {
-                        Text(appInfo.displayName()).font(.system(size: 16)).bold()
-                        if model.uiIsShared {
-                            Image(systemName: "arrowshape.turn.up.left.fill")
-                                .font(.system(size: 8))
-                                .foregroundColor(.white)
-                                .frame(width: 16, height:16)
-                                .background(
-                                    Capsule().fill(Color("BadgeColor"))
-                                )
-                        }
-                        if model.uiIsJITNeeded {
-                            Image(systemName: "bolt.fill")
-                                .font(.system(size: 8))
-                                .foregroundColor(.white)
-                                .frame(width: 16, height:16)
-                                .background(
-                                    Capsule().fill(Color("JITBadgeColor"))
-                                )
-                        }
-#if is32BitSupported
-                        if model.uiIs32bit {
-                            Text("32")
-                                .font(.system(size: 8))
-                                .foregroundColor(.white)
-                                .frame(width: 16, height:16)
-                                .background(
-                                    Capsule().fill(Color("32BitBadgeColor"))
-                                )
-                        }
-#endif
-                        if model.uiIsLocked && !model.uiIsHidden {
-                            Image(systemName: "lock.fill")
-                                .font(.system(size: 8))
-                                .foregroundColor(.white)
-                                .frame(width: 16, height:16)
-                                .background(
-                                    Capsule().fill(Color("BadgeColor"))
-                                )
-                        }
-                    }
-
-                    Text("\(appInfo.version() ?? "?") - \(appInfo.bundleIdentifier() ?? "?")").font(.system(size: 12)).foregroundColor(textColor)
-                    if !model.uiRemark.isEmpty {
-                        Text(model.uiRemark)
-                            .font(.system(size: 10))
-                            .foregroundColor(textColor.opacity(0.8))
-                            .lineLimit(1)
-                    }
-                    Text(model.uiSelectedContainer?.name ?? "lc.appBanner.noDataFolder".loc).font(.system(size: 8)).foregroundColor(textColor)
-                })
+                appIcon
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    titleRow
+                    versionRow
+                    containerRow
+                }
             }
             .allowsHitTesting(false)
             Spacer()
-            Button {
-                if #available(iOS 16.0, *), sharedModel.multiLCStatus != 2 && launchInMultitaskMode {
-                     if let currentDataFolder = model.uiSelectedContainer?.folderName,
-                        MultitaskManager.isUsing(container: currentDataFolder) {
-                         var found = false
-                         if #available(iOS 16.1, *) {
-                             found = MultitaskWindowManager.openExistingAppWindow(dataUUID: currentDataFolder)
-                         }
-                         if !found {
-                             found = MultitaskDockManager.shared.bringMultitaskViewToFront(uuid: currentDataFolder)
-                         }
-                         if found {
-                             return
-                         }
-                     }
-                     
-                    Task{ await runApp(multitask: true) }
-                } else {
-                    Task{ await runApp(multitask: false) }
-                }
-            } label: {
-                if !model.isSigningInProgress {
-                    Text("lc.appBanner.run".loc).bold().foregroundColor(.white)
-                        .lineLimit(1)
-                        .frame(height:32)
-                        .minimumScaleFactor(0.1)
-                } else {
-                    ProgressView().progressViewStyle(.circular)
-                }
-
+            runButton
+        }
+    }
+    
+    private var gridBody: some View {
+        Button(action: launchPreferred) {
+            VStack(alignment: .center, spacing: 8) {
+                appIcon
+                    .overlay(badgeOverlay, alignment: .topTrailing)
+                    .overlay(gridStatusOverlay, alignment: .bottomLeading)
+                Text(appInfo.displayName())
+                    .font(.system(size: 12))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity)
             }
-            .buttonStyle(BasicButtonStyle())
-            .padding()
-            .frame(idealWidth: 70)
-            .frame(height: 32)
-            .fixedSize()
-            .background(GeometryReader { g in
-                if !model.isSigningInProgress {
-                    Capsule().fill(dynamicColors ? mainColor : Color("FontColor"))
-                } else {
-                    let w = g.size.width
-                    let h = g.size.height
-                    Capsule()
-                        .fill(dynamicColors ? mainColor : Color("FontColor")).opacity(0.2)
-                    Circle()
-                        .fill(dynamicColors ? mainColor : Color("FontColor"))
-                        .frame(width: w * 2, height: w * 2)
-                        .offset(x: (model.signProgress - 2) * w, y: h/2-w)
-                }
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(model.isAppRunning)
+    }
+    
+    private var appIcon: some View {
+        Image(uiImage: icon)
+            .resizable()
+            .frame(width: style == .grid ? 64 : 60, height: style == .grid ? 64 : 60)
+            .clipShape(RoundedRectangle(cornerSize: CGSize(width:12, height: 12)))
+    }
+    
+    private var titleRow: some View {
+        HStack(spacing: 6) {
+            Text(appInfo.displayName()).font(.system(size: 16)).bold()
+            badgesRow
+        }
+    }
+    
+    private var versionRow: some View {
+        Text("\(appInfo.version() ?? "?") - \(appInfo.bundleIdentifier() ?? "?")")
+            .font(.system(size: 12))
+            .foregroundColor(dynamicColors ? mainColor : Color("FontColor"))
+    }
+    
+    private var containerRow: some View {
+        Text(model.uiSelectedContainer?.name ?? "lc.appBanner.noDataFolder".loc)
+            .font(.system(size: 10))
+            .foregroundColor(dynamicColors ? mainColor : Color("FontColor"))
+    }
 
-            })
-            .clipShape(Capsule())
-            .disabled(model.isAppRunning)
+    private var badgesRow: some View {
+        HStack(spacing: 4) {
+            if model.uiIsShared {
+                badge(icon: "arrowshape.turn.up.left.fill", color: Color("BadgeColor"))
+            }
+            if model.uiIsJITNeeded {
+                badge(icon: "bolt.fill", color: Color("JITBadgeColor"))
+            }
+#if is32BitSupported
+            if model.uiIs32bit {
+                Text("32")
+                    .font(.system(size: 8))
+                    .foregroundColor(.white)
+                    .frame(width: 16, height:16)
+                    .background(Capsule().fill(Color("32BitBadgeColor")))
+            }
+#endif
+            if model.uiIsLocked && !model.uiIsHidden {
+                badge(icon: "lock.fill", color: Color("BadgeColor"))
+            }
         }
+    }
+    
+    private var badgeOverlay: some View {
+        badgesRow
+            .padding(4)
+    }
+    
+    @ViewBuilder
+    private var gridStatusOverlay: some View {
+        if model.isSigningInProgress {
+            ProgressView()
+                .progressViewStyle(.circular)
+                .tint(.white)
+                .scaleEffect(0.75)
+                .frame(width: 16, height: 16)
+                .padding(4)
+                .background(Capsule().fill(Color("BadgeColor")))
+                .padding(4)
+        } else if model.isAppRunning {
+            badge(icon: "play.fill", color: Color("BadgeColor"))
+                .padding(4)
+        }
+    }
+    
+    private func badge(icon: String, color: Color) -> some View {
+        Image(systemName: icon)
+            .font(.system(size: 8))
+            .foregroundColor(.white)
+            .frame(width: 16, height:16)
+            .background(
+                Capsule().fill(color)
+            )
+    }
+    
+    private var runButton: some View {
+        let isGrid = style == .grid
+        return Button {
+            launchPreferred()
+        } label: {
+            if !model.isSigningInProgress {
+                Text("lc.appBanner.run".loc).bold().foregroundColor(.white)
+                    .lineLimit(1)
+                    .frame(height:32)
+                    .minimumScaleFactor(0.1)
+            } else {
+                ProgressView().progressViewStyle(.circular)
+            }
+
+        }
+        .buttonStyle(BasicButtonStyle())
         .padding()
-        .frame(height: 88)
-        .background {
-            RoundedRectangle(cornerSize: CGSize(width:22, height: 22)).fill(dynamicColors ? mainColor.opacity(0.5) : Color("AppBannerBG"))
-                .onTapGesture(count: 2) {
-                    openSettings()
+        .frame(idealWidth: 70)
+        .frame(height: 32)
+        .frame(maxWidth: isGrid ? .infinity : nil, alignment: .trailing)
+        .fixedSize(horizontal: !isGrid, vertical: false)
+        .background(GeometryReader { g in
+            if !model.isSigningInProgress {
+                Capsule().fill(dynamicColors ? mainColor : Color("FontColor"))
+            } else {
+                let w = g.size.width
+                let h = g.size.height
+                Capsule()
+                    .fill(dynamicColors ? mainColor : Color("FontColor")).opacity(0.2)
+                Circle()
+                    .fill(dynamicColors ? mainColor : Color("FontColor"))
+                    .frame(width: w * 2, height: w * 2)
+                    .offset(x: (model.signProgress - 2) * w, y: h/2-w)
+            }
+
+        })
+        .clipShape(Capsule())
+        .disabled(model.isAppRunning)
+    }
+    
+    private func launchPreferred() {
+        if #available(iOS 16.0, *), sharedModel.multiLCStatus != 2 && launchInMultitaskMode && model.uiIsShared {
+            if let currentDataFolder = model.uiSelectedContainer?.folderName,
+               MultitaskManager.isUsing(container: currentDataFolder) {
+                var found = false
+                if #available(iOS 16.1, *) {
+                    found = MultitaskWindowManager.openExistingAppWindow(dataUUID: currentDataFolder)
                 }
+                if !found {
+                    found = MultitaskDockManager.shared.bringMultitaskViewToFront(uuid: currentDataFolder)
+                }
+                if found {
+                    return
+                }
+            }
+            
+            Task { await runApp(multitask: true) }
+        } else {
+            Task { await runApp(multitask: false) }
         }
+    }
+    
+    var body: some View {
+        content
+            .padding()
+            .frame(height: style == .list ? 88 : nil)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                RoundedRectangle(cornerSize: CGSize(width:22, height: 22)).fill(dynamicColors ? mainColor.opacity(0.5) : Color("AppBannerBG"))
+                    .onTapGesture(count: 2) {
+                        openSettings()
+                    }
+            }
         .fileExporter(
             isPresented: $saveIconExporterShow,
             document: saveIconFile,
@@ -482,35 +560,53 @@ struct LCAppBanner : View {
 
 
 struct LCAppSkeletonBanner: View {
+    var style: LCAppBannerStyle = .list
+    
     var body: some View {
-        HStack {
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color.gray.opacity(0.3))
-                .frame(width: 60, height: 60)
-            
-            VStack(alignment: .leading, spacing: 5) {
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(Color.gray.opacity(0.3))
-                    .frame(width: 100, height: 16)
-                
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(Color.gray.opacity(0.3))
-                    .frame(width: 150, height: 12)
-                
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(Color.gray.opacity(0.3))
-                    .frame(width: 120, height: 8)
+        Group {
+            if style == .grid {
+                VStack(spacing: 8) {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.gray.opacity(0.3))
+                        .frame(width: 64, height: 64)
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.gray.opacity(0.3))
+                        .frame(width: 90, height: 14)
+                }
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .center)
+                .background(RoundedRectangle(cornerRadius: 22).fill(Color.gray.opacity(0.1)))
+            } else {
+                HStack {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.gray.opacity(0.3))
+                        .frame(width: 60, height: 60)
+                    
+                    VStack(alignment: .leading, spacing: 5) {
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color.gray.opacity(0.3))
+                            .frame(width: 100, height: 16)
+                        
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color.gray.opacity(0.3))
+                            .frame(width: 150, height: 12)
+                        
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color.gray.opacity(0.3))
+                            .frame(width: 120, height: 8)
+                    }
+                    
+                    Spacer()
+                    
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(Color.gray.opacity(0.3))
+                        .frame(width: 70, height: 32)
+                }
+                .padding()
+                .frame(height: 88)
+                .background(RoundedRectangle(cornerRadius: 22).fill(Color.gray.opacity(0.1)))
             }
-            
-            Spacer()
-            
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Color.gray.opacity(0.3))
-                .frame(width: 70, height: 32)
         }
-        .padding()
-        .frame(height: 88)
-        .background(RoundedRectangle(cornerRadius: 22).fill(Color.gray.opacity(0.1)))
     }
     
 }

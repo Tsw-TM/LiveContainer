@@ -1,7 +1,18 @@
-# copy lc
-wget https://github.com/LiveContainer/SideStore/releases/download/dylibify/dylibify
-chmod +x dylibify
-brew install ldid
+# prepare cached build tools
+TOOL_CACHE_DIR="${TOOL_CACHE_DIR:-.github/tool-cache}"
+mkdir -p "$TOOL_CACHE_DIR"
+
+DYLIBIFY_URL="https://github.com/LiveContainer/SideStore/releases/download/dylibify/dylibify"
+DYLIBIFY_PATH="$TOOL_CACHE_DIR/dylibify"
+
+if [ ! -x "$DYLIBIFY_PATH" ]; then
+  curl -L --fail -o "$DYLIBIFY_PATH" "$DYLIBIFY_URL"
+  chmod +x "$DYLIBIFY_PATH"
+fi
+
+if ! command -v ldid >/dev/null 2>&1; then
+  brew install ldid
+fi
 
 # move lc to working folder
 mv "$archive_path.xcarchive/Products/Applications" Payload
@@ -47,7 +58,7 @@ cd ..
 
 # SideStore
 mv ./tmp/Payload/SideStore.app ./Payload/LiveContainer.app/Frameworks/SideStoreApp.framework
-./dylibify ./Payload/LiveContainer.app/Frameworks/SideStoreApp.framework/SideStore ./Payload/LiveContainer.app/Frameworks/SideStoreApp.framework/SideStore.dylib
+"$DYLIBIFY_PATH" ./Payload/LiveContainer.app/Frameworks/SideStoreApp.framework/SideStore ./Payload/LiveContainer.app/Frameworks/SideStoreApp.framework/SideStore.dylib
 rm ./Payload/LiveContainer.app/Frameworks/SideStoreApp.framework/SideStore
 mv ./Payload/LiveContainer.app/Frameworks/SideStoreApp.framework/SideStore.dylib ./Payload/LiveContainer.app/Frameworks/SideStoreApp.framework/SideStore
 ldid -S"" ./Payload/LiveContainer.app/Frameworks/SideStoreApp.framework/SideStore
